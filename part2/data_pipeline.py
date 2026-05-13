@@ -114,11 +114,50 @@ class EDA:
         return ans
     
 
+    def plot_target_histogram(self) -> none:
+        self.df['SYSTOLIC_TARGET'] = self.df[['BPXOSY1', 'BPXOSY2', 'BPXOSY3']].mean(axis=1)
+        
+        plt.figure(figsize=(10, 6))
+        
+        sns.histplot(self.df['SYSTOLIC_TARGET'].dropna(), kde=True, color='royalblue', bins=30)
+        
+        plt.title('Phân phối Huyết áp tâm thu trung bình', fontsize=15)
+        plt.xlabel('Huyết áp (mmHg)', fontsize=12)
+        plt.ylabel('Tần suất (Số người)', fontsize=12)
+        plt.grid(axis='y', alpha=0.3)
+        plt.show()
+
+    def plot_target_boxplot(self) -> none:
+        if 'SYSTOLIC_TARGET' not in self.df.columns:
+            self.df['SYSTOLIC_TARGET'] = self.df[['BPXOSY1', 'BPXOSY2', 'BPXOSY3']].mean(axis=1)
+        
+        plt.figure(figsize=(10, 5))
+        
+        sns.boxplot(x=self.df['SYSTOLIC_TARGET'].dropna(), color='salmon', fliersize=5)
+        
+        plt.title('Biểu đồ Boxplot của Huyết áp tâm thu trung bình', fontsize=15)
+        plt.xlabel('Huyết áp (mmHg)', fontsize=12)
+        plt.show()
+
+
+    def plot_correlation_heatmap(self) -> none:  
+        self.df['SYSTOLIC_TARGET'] = self.df[['BPXOSY1', 'BPXOSY2', 'BPXOSY3']].mean(axis=1)
+        cols = ['SYSTOLIC_TARGET', 'RIDAGEYR', 'BMXBMI', 'BMXWAIST', 
+                'BMXHT', 'BMXWT', 'LBXTC', 'LBXSCR', 'SLD012', 'PAQ680']
+        
+        corr_matrix = self.df[cols].corr()
+        
+        plt.figure(figsize=(12, 10))
+        
+        sns.heatmap(corr_matrix, annot=True, cmap='coolwarm', fmt=".2f", linewidths=0.5)
+        
+        plt.title('Ma trận tương quan giữa các biến', fontsize=15)
+        plt.show()
+
+
 if __name__ == '__main__':
     df = load_data()
     eda = EDA(df)
-    missing_rates = eda.missingRate()
-    
-    print("Tỷ lệ dữ liệu bị thiếu (Missing Rate) cho từng cột:")
-    for col, rate in zip(df.columns, missing_rates):
-        print(f"{col}: {rate:.2%}")
+    #eda.plot_target_histogram()
+    #eda.plot_target_boxplot()
+    eda.plot_correlation_heatmap()
