@@ -114,7 +114,7 @@ class EDA:
         return ans
     
 
-    def plot_target_histogram(self) -> none:
+    def plot_target_histogram(self) -> None:
         self.df['SYSTOLIC_TARGET'] = self.df[['BPXOSY1', 'BPXOSY2', 'BPXOSY3']].mean(axis=1)
         
         plt.figure(figsize=(10, 6))
@@ -127,7 +127,7 @@ class EDA:
         plt.grid(axis='y', alpha=0.3)
         plt.show()
 
-    def plot_target_boxplot(self) -> none:
+    def plot_target_boxplot(self) -> None:
         if 'SYSTOLIC_TARGET' not in self.df.columns:
             self.df['SYSTOLIC_TARGET'] = self.df[['BPXOSY1', 'BPXOSY2', 'BPXOSY3']].mean(axis=1)
         
@@ -140,11 +140,13 @@ class EDA:
         plt.show()
 
 
-    def plot_correlation_heatmap(self) -> none:  
+    def plot_correlation_heatmap(self) -> None:  
         self.df['SYSTOLIC_TARGET'] = self.df[['BPXOSY1', 'BPXOSY2', 'BPXOSY3']].mean(axis=1)
-        cols = ['SYSTOLIC_TARGET', 'RIDAGEYR', 'BMXBMI', 'BMXWAIST', 
-                'BMXHT', 'BMXWT', 'LBXTC', 'LBXSCR', 'SLD012', 'PAQ680']
-        
+        self.df['nhiptim'] = self.df[['BPXOPLS1', 'BPXOPLS2', 'BPXOPLS3']].mean(axis=1)
+        cols = [
+            'SYSTOLIC_TARGET', 'RIDAGEYR', 'RIAGENDR', 'BMXHT', 'BMXBMI', 
+            'nhiptim', 'SMQ020', 'DIQ010', 'LBXTC', 'LBXSCR'
+        ]        
         corr_matrix = self.df[cols].corr()
         
         plt.figure(figsize=(12, 10))
@@ -153,11 +155,26 @@ class EDA:
         
         plt.title('Ma trận tương quan giữa các biến', fontsize=15)
         plt.show()
+    
+    def check_duplicates(self):    
+        total_dup = self.df.duplicated().sum()
+        print(f"Số dòng trùng lặp hoàn toàn: {total_dup}")
+        id_dup = self.df['SEQN'].duplicated().sum()
+        print(f"Số ID bị trùng: {id_dup}")
+        if total_dup > 0:
+            df = self.df.drop_duplicates()
+            print("Đã xóa các dòng trùng lặp hoàn toàn.")
 
-
+    def dropCol(self) -> None:
+        colDrop = ['MCQ160E', 'MCQ160F']
+        self.df.drop(columns=colDrop, inplace=True, errors='ignore')
+        self.df.to_csv('DATA/nhanes_stroke_analysis.csv', index=False)
+        
 if __name__ == '__main__':
     df = load_data()
     eda = EDA(df)
     #eda.plot_target_histogram()
     #eda.plot_target_boxplot()
     eda.plot_correlation_heatmap()
+    #eda.check_duplicates()
+    #eda.dropCol()
