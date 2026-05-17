@@ -144,7 +144,7 @@ class EDA:
         self.df['SYSTOLIC_TARGET'] = self.df[['BPXOSY1', 'BPXOSY2', 'BPXOSY3']].mean(axis=1)
         self.df['nhiptim'] = self.df[['BPXOPLS1', 'BPXOPLS2', 'BPXOPLS3']].mean(axis=1)
         cols = [
-            'SYSTOLIC_TARGET', 'RIDAGEYR', 'RIAGENDR', 'BMXHT', 'BMXBMI', 
+            'SYSTOLIC_TARGET', 'SEQN','RIDAGEYR', 'RIAGENDR', 'BMXBMI', 
             'nhiptim', 'SMQ020', 'DIQ010', 'LBXTC', 'LBXSCR'
         ]        
         corr_matrix = self.df[cols].corr()
@@ -166,15 +166,78 @@ class EDA:
             print("Đã xóa các dòng trùng lặp hoàn toàn.")
 
     def dropCol(self) -> None:
-        colDrop = ['MCQ160E', 'MCQ160F']
+        colDrop = ['BMXHT']
         self.df.drop(columns=colDrop, inplace=True, errors='ignore')
         self.df.to_csv('DATA/nhanes_stroke_analysis.csv', index=False)
+    
+    def detectOutliers(self) -> None:
+        initial_rows = len(self.df)
         
+        is_valid = pd.Series(True, index=self.df.index)
+        
+        numeric_limits = {
+            'RIDAGEYR': (0.1, 100.0),
+            'BMXBMI': (10.0, 90.0),
+            'BPXOSY1': (40.0, 260.0),
+            'BPXOSY2': (40.0, 260.0),
+            'BPXOSY3': (40.0, 260.0),
+            'BPXOPLS1': (30.0, 220.0),
+            'BPXOPLS2': (30.0, 220.0),
+            'BPXOPLS3': (30.0, 220.0),
+            'LBXTC': (50.0, 500.0),
+            'LBXSCR': (0.1, 10.0)
+        }
+        for col, (min_val, max_val) in numeric_limits.items():
+            if col in self.df.columns:
+                condition = ((self.df[col] >= min_val) & (self.df[col] <= max_val)) | self.df[col].isna()
+                is_valid &= condition
+        
+        categorical_limits = {
+            'RIAGENDR': [1, 2],
+            'DIQ010': [1, 2, 3]
+        }
+        for col, valid_codes in categorical_limits.items():
+            if col in self.df.columns:
+                condition = self.df[col].isin(valid_codes) | self.df[col].isna()
+                is_valid &= condition
+
+        iqr_columns = ['RIDAGEYR', 'BMXBMI', 'LBXTC', 'LBXSCR']
+        for col in iqr_columns:
+            if col in self.df.columns:
+                Q1 = self.df[col].quantile(0.25)
+                Q3 = self.df[col].quantile(0.75)
+                IQR = Q3 - Q1
+                
+                lower_bound = Q1 - 2 * IQR
+                upper_bound = Q3 + 2 * IQR
+                
+                iqr_condition = ((self.df[col] >= lower_bound) & (self.df[col] <= upper_bound)) | self.df[col].isna()
+                is_valid &= iqr_condition
+
+        df_invalid = self.df[~is_valid]
+        
+        if len(df_invalid) > 0:
+            df_invalid.to_csv('nhanes_stroke_analysis_missing_bp.csv', index=False)
+            print(f"--> Đã lưu {len(df_invalid)} dòng ngoại lai/lỗi vào file 'nhanes_stroke_analysis_missing_bp.csv'")
+        else:
+            print("--> Tuyệt vời! Không phát hiện dòng ngoại lai nào.")
+            
+        self.df = self.df[is_valid]
+
+        file_goc_path = 'nhanes_stroke_analysis.csv' 
+        self.df.to_csv(file_goc_path, index=False)
+        
+        dropped_rows = initial_rows - len(self.df)
+        print(f"\n--- KẾT QUẢ TÍCH HỢP BIOLOGICAL + IQR FILTER ---")
+        print(f"Số dòng ban đầu: {initial_rows}")
+        print(f"Số dòng sau khi lọc sạch hoàn toàn: {len(self.df)}")
+        print(f"Tổng số dòng đã loại bỏ: {dropped_rows} dòng.")
 if __name__ == '__main__':
     df = load_data()
     eda = EDA(df)
     #eda.plot_target_histogram()
-    #eda.plot_target_boxplot()
-    eda.plot_correlation_heatmap()
+    eda.plot_target_boxplot()
+    #eda.plot_correlation_heatmap()
     #eda.check_duplicates()
     #eda.dropCol()
+    #eda.detectOutliers()
