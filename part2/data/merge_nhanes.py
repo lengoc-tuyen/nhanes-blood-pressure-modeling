@@ -5,7 +5,7 @@ import pandas as pd
 import numpy as np
 
 
-RAW_DIR = Path(__file__).parent  # Script's directory (DATA/dataset/)
+RAW_DIR = Path(__file__).parent / "dataset"  # Script's directory (DATA/dataset/)
 OUT_DIR = Path(__file__).parent / "processed"
 OUT_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -92,7 +92,7 @@ missing_selected = [col for col in selected_cols if col not in df.columns]
 
 data = df[existing_cols].copy()
 
-raw_merged_path = OUT_DIR / "nhanes_stroke_analysis.csv"
+raw_merged_path = OUT_DIR / "nhanes_stroke_raw.csv"
 data.to_csv(raw_merged_path, index=False)
 
 print("Merged shape:", df.shape)
