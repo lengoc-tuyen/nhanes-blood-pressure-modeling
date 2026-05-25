@@ -1,8 +1,16 @@
-.venv
-.DS_Store
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+*.egg-info/
 
-part2/.DS_Store
+# OS
 .DS_Store
-part2/.DS_Store
-part2/data/.DS_Store
-.DS_Store
+Thumbs.db
+
+# Large raw data files (download separately — see README)
+part2/data/dataset/*.xpt
+
+# Jupyter checkpoints
+.ipynb_checkpoints/
