@@ -1,18 +1,6 @@
 """
-data_pipeline.py
-================
-Thành viên C — Tiền xử lý dữ liệu
-Môn: Toán Ứng Dụng và Thống Kê (MTH00051)
-
-Gồm hai class:
-  - EDA          : Phân tích dữ liệu khám phá (dùng cho notebook)
-  - DataPipeline : Transformer fit/transform để ngăn data leakage
-
-Luồng sử dụng DataPipeline:
-    pipe = DataPipeline(CONTINUOUS_COLS, CATEGORICAL_COLS)
-    X_tr_df, X_te_df, y_train, y_test = pipe.load_and_split('data/nhanes_pre_pipeline.csv')
-    X_train, feat_names = pipe.fit_transform(X_tr_df)
-    X_test,  _          = pipe.transform(X_te_df)
+EDA  : thống kê mô tả, phát hiện outlier, imputation, visualisation.
+DataPipeline : fit/transform theo chuẩn sklearn để ngăn data leakage.
 """
 
 from __future__ import annotations
@@ -25,10 +13,10 @@ from collections import Counter
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# EDA CLASS  (giữ lại để thành viên khác dùng trong notebook)
+# EDA CLASS  (dùng trong notebook)
 # ─────────────────────────────────────────────────────────────────────────────
 
-def load_data(path: str = 'DATA/nhanes_stroke_analysis.csv') -> pd.DataFrame:
+def load_data(path: str = 'data/processed/nhanes_pre_pipeline.csv') -> pd.DataFrame:
     return pd.read_csv(path)
 
 
@@ -225,28 +213,8 @@ class EDA:
 
 class DataPipeline:
     """
-    Transformer theo chuẩn sklearn (fit/transform) để ngăn data leakage.
-
-    Thứ tự transform:
-        1. Drop SEQN
-        2. Remap giá trị không hợp lệ của categorical → NaN
-        3. Điền NaN continuous bằng median (từ fit)
-        4. Điền NaN categorical bằng mode (từ fit)
-        5. One-hot encode categorical (dùng category_maps từ fit)
-        6. Z-score standardize continuous (dùng mean/std từ fit)
-        7. Prepend cột bias = 1
-
-    Parameters
-    ----------
-    continuous_cols : list[str]
-        Tên các cột liên tục cần standardize.
-    categorical_cols : list[str]
-        Tên các cột phân loại cần one-hot encode.
-    target_col : str
-        Tên cột mục tiêu (y), không đưa vào X.
-    invalid_cat_values : dict[str, list]
-        Giá trị cần coi là NaN trong categorical cols.
-        Ví dụ: {'SMQ020': [7, 9]} → refused/don't know.
+    Transformer fit/transform để ngăn data leakage.
+    Thứ tự: remap invalid → impute median/mode → one-hot → z-score → prepend bias.
     """
 
     def __init__(self,
@@ -259,7 +227,6 @@ class DataPipeline:
         self.target_col         = target_col
         self.invalid_cat_values = invalid_cat_values or {}
 
-        # Tham số học từ fit() — khởi tạo rỗng
         self.impute_median_: dict[str, float] = {}
         self.impute_mode_: dict[str, float]   = {}
         self.scaler_mean_: dict[str, float]   = {}
@@ -268,7 +235,6 @@ class DataPipeline:
         self.feature_names_: list[str]        = []
         self.is_fitted_: bool                 = False
 
-    # ── Private helpers ───────────────────────────────────────────────────────
 
     def _remap_invalid(self, df: pd.DataFrame) -> pd.DataFrame:
         """Thay các giá trị không hợp lệ của categorical cols bằng NaN."""
@@ -307,48 +273,29 @@ class DataPipeline:
                 names.append(f"{col}_{cat}")
         return names
 
-    # ── Public API ────────────────────────────────────────────────────────────
-
     def fit(self, X_train: pd.DataFrame, y_train=None) -> 'DataPipeline':
-        """
-        Học tham số từ X_train ONLY.
-
-        Parameters
-        ----------
-        X_train : pd.DataFrame
-            Dữ liệu huấn luyện (chứa target col nếu có, sẽ bị bỏ qua).
-        y_train : ignored (tương thích sklearn API)
-
-        Returns
-        -------
-        self
-        """
+        """Học tham số (median, mode, mean, std, category_maps) từ X_train."""
         df = X_train.copy()
         df = self._remap_invalid(df)
 
-        # 1. Median cho continuous
         for col in self.continuous_cols:
             if col in df.columns:
                 self.impute_median_[col] = self._compute_median(df[col])
 
-        # 2. Mode cho categorical
         for col in self.categorical_cols:
             if col in df.columns:
                 self.impute_mode_[col] = self._compute_mode(df[col])
 
-        # 3. Điền NaN tạm để tính mean/std
         df_filled = df.copy()
         for col in self.continuous_cols:
             if col in df_filled.columns:
                 df_filled[col] = df_filled[col].fillna(self.impute_median_.get(col, 0))
 
-        # 4. Mean & std (sau khi điền) cho z-score
         for col in self.continuous_cols:
             if col in df_filled.columns:
                 self.scaler_mean_[col] = float(df_filled[col].mean())
                 self.scaler_std_[col]  = float(df_filled[col].std(ddof=1))
 
-        # 5. Unique categories (sorted, dùng để one-hot encode nhất quán)
         for col in self.categorical_cols:
             if col in df.columns:
                 self.category_maps_[col] = sorted(
@@ -361,56 +308,34 @@ class DataPipeline:
         return self
 
     def transform(self, X: pd.DataFrame) -> tuple[np.ndarray, list[str]]:
-        """
-        Áp dụng tham số từ fit() lên X bất kỳ (train hoặc test).
-
-        Parameters
-        ----------
-        X : pd.DataFrame
-            Dữ liệu cần transform.
-
-        Returns
-        -------
-        X_array : np.ndarray, shape (n, d+1)
-            Ma trận đặc trưng đã xử lý, cột đầu là bias = 1.
-        feature_names : list[str]
-            Tên từng cột trong X_array.
-        """
+        """Áp dụng tham số từ fit() lên X. Trả về (X_array, feature_names)."""
         if not self.is_fitted_:
             raise RuntimeError("Gọi fit() trước khi transform().")
 
         df = X.copy()
 
-        # Drop ID và target nếu có
         for col in ['SEQN', self.target_col]:
             if col in df.columns:
                 df.drop(columns=[col], inplace=True)
 
-        # Remap invalid → NaN
         df = self._remap_invalid(df)
 
-        # Điền NaN continuous
         for col in self.continuous_cols:
             if col in df.columns:
                 df[col] = df[col].fillna(self.impute_median_.get(col, 0))
 
-        # Điền NaN categorical
         for col in self.categorical_cols:
             if col in df.columns:
                 df[col] = df[col].fillna(self.impute_mode_.get(col))
 
-        # One-hot encode categorical
         for col in self.categorical_cols:
             if col not in df.columns:
                 continue
             cats = self.category_maps_.get(col, [])
-            # drop_first: bỏ category đầu tiên
-            for cat in cats[1:]:
-                new_col = f"{col}_{cat}"
-                df[new_col] = (df[col] == cat).astype(float)
+            for cat in cats[1:]:   # drop_first
+                df[f"{col}_{cat}"] = (df[col] == cat).astype(float)
             df.drop(columns=[col], inplace=True)
 
-        # Z-score standardize continuous
         for col in self.continuous_cols:
             if col not in df.columns:
                 continue
@@ -418,15 +343,12 @@ class DataPipeline:
             std  = self.scaler_std_.get(col, 1.0)
             if std > 1e-10:
                 df[col] = (df[col] - mean) / std
-            # std ≈ 0 → không scale
 
-        # Prepend bias column
         df.insert(0, 'bias', 1.0)
 
-        # Đảm bảo thứ tự cột khớp với feature_names_
         for col in self.feature_names_:
             if col not in df.columns:
-                df[col] = 0.0   # category mới ở test chưa thấy trong train
+                df[col] = 0.0
         df = df[self.feature_names_]
 
         return df.to_numpy(dtype=float), list(self.feature_names_)
@@ -441,23 +363,8 @@ class DataPipeline:
                        test_size: float = 0.2,
                        seed: int = 42
                        ) -> tuple[pd.DataFrame, pd.DataFrame, np.ndarray, np.ndarray]:
-        """
-        Load CSV, tách X/y, shuffle rồi split train/test.
-
-        Parameters
-        ----------
-        csv_path  : đường dẫn tới nhanes_pre_pipeline.csv
-        test_size : tỉ lệ test (mặc định 0.2)
-        seed      : random seed để tái lập
-
-        Returns
-        -------
-        X_train_df, X_test_df : pd.DataFrame (giữ nguyên để fit/transform)
-        y_train, y_test        : np.ndarray
-        """
+        """Load CSV, shuffle, split train/test. Trả về (X_train_df, X_test_df, y_train, y_test)."""
         df = pd.read_csv(csv_path)
-
-        # Shuffle
         df = df.sample(frac=1, random_state=seed).reset_index(drop=True)
 
         n_test = int(len(df) * test_size)
@@ -500,7 +407,7 @@ if __name__ == '__main__':
     import os
 
     THIS_DIR = os.path.dirname(os.path.abspath(__file__))
-    CSV = os.path.join(THIS_DIR, 'data', 'nhanes_pre_pipeline.csv')
+    CSV = os.path.join(THIS_DIR, 'data', 'processed', 'nhanes_pre_pipeline.csv')
 
     CONTINUOUS  = ['RIDAGEYR', 'BMXBMI', 'BPXOPLS', 'LBXTC', 'LBXSCR']
     CATEGORICAL = ['RIAGENDR', 'SMQ020', 'DIQ010']

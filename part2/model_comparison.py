@@ -1,22 +1,6 @@
 """
-model_comparison.py
-===================
-Thành viên D — Xây dựng và So sánh Mô hình Hồi quy
-Môn: Toán Ứng Dụng và Thống Kê (MTH00051)
-
-Tất cả thuật toán ước lượng hệ số beta dùng hàm từ Part 1 (from scratch).
-scikit-learn chỉ dùng để kiểm chứng.
-
-Các hàm chính:
-  select_features_by_pvalue  — loại biến dựa trên p-value
-  select_features_by_vif     — loại biến đa cộng tuyến (VIF)
-  find_best_lambda           — chọn λ tối ưu cho Ridge qua k-fold CV
-  train_multiple_models      — huấn luyện ≥3 mô hình
-  evaluate_on_test_set       — MAE, RMSE, R² trên test set
-  plot_feature_importance    — trực quan hóa hệ số hồi quy
-  plot_model_comparison      — bảng so sánh MAE/RMSE/R²
-  run_residual_analysis      — 4 biểu đồ chuẩn đoán phần dư
-  plot_cv_lambda             — đường CV score theo lambda
+Feature selection, huấn luyện và so sánh OLS / Ridge trên NHANES dataset.
+Tất cả thuật toán dùng hàm from scratch từ part1.
 """
 
 from __future__ import annotations
@@ -29,21 +13,17 @@ import matplotlib.pyplot as plt
 import matplotlib.gridspec as gridspec
 import seaborn as sns
 
-# ── Import hàm từ Part 1 ──────────────────────────────────────────────────────
 _PART1 = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'part1')
 sys.path.insert(0, _PART1)
 
-from ols_implementation import ols_fit          # β = (X'X)⁻¹X'y
-from ridge_lasso import ridge_fit, vif          # β_ridge = (X'X + λI)⁻¹X'y, VIF
-from residual_analysis import (                 # metrics, inference, plots
-    model_metrics, coef_inference, residual_plots
-)
-from cross_validation import kfold_cv           # k-fold CV
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# 1. FEATURE SELECTION — p-value
-# ─────────────────────────────────────────────────────────────────────────────
+# pyrefly: ignore [missing-import]
+from ols_implementation import ols_fit
+# pyrefly: ignore [missing-import]
+from ridge_lasso import ridge_fit, vif
+# pyrefly: ignore [missing-import]
+from residual_analysis import model_metrics, coef_inference, residual_plots
+# pyrefly: ignore [missing-import]
+from cross_validation import kfold_cv
 
 def select_features_by_pvalue(
     X_train: np.ndarray,
@@ -51,23 +31,7 @@ def select_features_by_pvalue(
     feature_names: list[str],
     threshold: float = 0.05,
 ) -> tuple[np.ndarray, list[int], list[str]]:
-    """
-    Loại bỏ biến không có ý nghĩa thống kê (p-value > threshold).
-    Intercept (cột 0) luôn được giữ lại.
-
-    Parameters
-    ----------
-    X_train      : ma trận design (n, d+1), cột 0 là bias
-    y_train      : vector mục tiêu (n,)
-    feature_names: tên từng cột, bao gồm 'bias'
-    threshold    : ngưỡng p-value (mặc định 0.05)
-
-    Returns
-    -------
-    X_selected   : (n, d_sel+1)
-    kept_indices : danh sách chỉ số cột được giữ (luôn bao gồm 0)
-    kept_names   : tên cột tương ứng
-    """
+    """Loại biến không có ý nghĩa thống kê (p-value > threshold). Intercept luôn giữ."""
     result = ols_fit(X_train, y_train)
     infer  = coef_inference(X_train, y_train,
                             result['beta_hat'], result['sigma2'])
@@ -96,20 +60,7 @@ def select_features_by_vif(
     feature_names: list[str],
     threshold: float = 10.0,
 ) -> tuple[np.ndarray, list[int], list[str]]:
-    """
-    Loại bỏ iteratively biến có VIF cao nhất (> threshold).
-    Intercept (cột 0) không tính VIF, luôn được giữ.
-
-    Parameters
-    ----------
-    X_train      : (n, d+1), cột 0 là bias
-    feature_names: tên từng cột (bao gồm 'bias')
-    threshold    : ngưỡng VIF (mặc định 10)
-
-    Returns
-    -------
-    X_selected, kept_indices, kept_names
-    """
+    """Loại iteratively biến có VIF cao nhất (> threshold). Intercept luôn giữ."""
     current_idx   = list(range(X_train.shape[1]))
     current_names = list(feature_names)
 
@@ -148,22 +99,7 @@ def find_best_lambda(
     k: int = 5,
     seed: int = 42,
 ) -> tuple[float, dict]:
-    """
-    Dùng k-fold cross-validation để chọn λ tối ưu cho Ridge.
-
-    Parameters
-    ----------
-    X_train : ma trận train (n, d+1)
-    y_train : vector mục tiêu (n,)
-    lambdas : mảng các giá trị λ (mặc định logspace(-3, 4, 50))
-    k       : số fold (mặc định 5)
-    seed    : random seed
-
-    Returns
-    -------
-    best_lambda : float
-    cv_results  : dict {'lambdas', 'cv_scores', 'best_idx'}
-    """
+    """Chọn λ tối ưu cho Ridge bằng k-fold CV. Trả về (best_lambda, cv_results)."""
     if lambdas is None:
         lambdas = np.logspace(-3, 4, 50)
 
@@ -193,25 +129,9 @@ def train_multiple_models(
     cv_k: int = 5,
     seed: int = 42,
 ) -> dict:
-    """
-    Huấn luyện ≥3 mô hình hồi quy.
-
-    Mô hình 1 — OLS cơ bản:   ols_fit trên toàn bộ biến
-    Mô hình 2 — OLS chọn biến: p-value filter → VIF filter → ols_fit
-    Mô hình 3 — Ridge:         ridge_fit với λ tốt nhất từ k-fold CV
-
-    Returns
-    -------
-    dict {
-        'ols_full'     : {..., 'beta_hat', 'feature_names', 'kept_indices', 'metrics'},
-        'ols_selective': {..., 'beta_hat', 'feature_names', 'kept_indices', 'metrics'},
-        'ridge'        : {..., 'beta_hat', 'feature_names', 'lambda', 'cv_results', 'metrics'},
-    }
-    """
+    """Huấn luyện 3 mô hình: OLS full, OLS chọn biến (p-value + VIF), Ridge (CV λ)."""
     models = {}
     p = X_train.shape[1] - 1
-
-    # ── Model 1: OLS cơ bản ──────────────────────────────────────────────────
     print("─── Model 1: OLS cơ bản ───")
     res1     = ols_fit(X_train, y_train)
     metrics1 = model_metrics(y_train, res1['y_hat'], p)
@@ -247,7 +167,6 @@ def train_multiple_models(
         'metrics'      : metrics2,
     }
 
-    # ── Model 3: Ridge ───────────────────────────────────────────────────────
     print("\n─── Model 3: Ridge Regression ───")
     best_lam, cv_res = find_best_lambda(X_train, y_train, k=cv_k, seed=seed)
     print(f"  Best λ = {best_lam:.6f}  (CV MSE = {min(cv_res['cv_scores']):.4f})")
@@ -277,13 +196,7 @@ def evaluate_on_test_set(
     X_test: np.ndarray,
     y_test: np.ndarray,
 ) -> pd.DataFrame:
-    """
-    Tính MAE, RMSE, R², R²_adj trên test set cho từng mô hình.
-
-    Returns
-    -------
-    pd.DataFrame columns = ['Model', 'MAE', 'RMSE', 'R2', 'R2_adj', '#Features']
-    """
+    """Tính MAE, RMSE, R², R²_adj trên test set. Trả về DataFrame so sánh các mô hình."""
     rows = []
 
     for name, model in models_dict.items():
@@ -316,11 +229,7 @@ def plot_feature_importance(
     models_dict: dict,
     figsize: tuple = (14, 5),
 ) -> plt.Figure:
-    """
-    Horizontal bar chart |β_j| cho từng mô hình (bỏ intercept).
-
-    Returns plt.Figure
-    """
+    """Horizontal bar chart |β_j| cho từng mô hình (bỏ intercept)."""
     n_models = len(models_dict)
     fig, axes = plt.subplots(1, n_models, figsize=figsize, squeeze=False)
     fig.suptitle("Feature Importance — |β_j| (sau Z-score chuẩn hóa)",
@@ -349,11 +258,7 @@ def plot_model_comparison(
     results_df: pd.DataFrame,
     figsize: tuple = (13, 4),
 ) -> plt.Figure:
-    """
-    Grouped bar chart so sánh MAE, RMSE, R² trên test set.
-
-    Returns plt.Figure
-    """
+    """Grouped bar chart so sánh MAE, RMSE, R² trên test set."""
     fig, axes = plt.subplots(1, 3, figsize=figsize)
     fig.suptitle("So Sánh Hiệu Năng Mô Hình (Test Set)", fontsize=13,
                  fontweight='bold')
@@ -386,11 +291,7 @@ def run_residual_analysis(
     X_test: np.ndarray,
     y_test: np.ndarray,
 ) -> plt.Figure:
-    """
-    Vẽ 4 biểu đồ phân tích phần dư cho mô hình chỉ định (dùng residual_plots từ Part 1).
-
-    Returns plt.Figure
-    """
+    """Vẽ 4 biểu đồ phân tích phần dư cho mô hình chỉ định."""
     model    = models_dict[best_model_key]
     beta     = model['beta_hat']
     kept_idx = model.get('kept_indices', list(range(X_test.shape[1])))
@@ -407,11 +308,7 @@ def run_residual_analysis(
 # ─────────────────────────────────────────────────────────────────────────────
 
 def plot_cv_lambda(cv_results: dict, best_lambda: float) -> plt.Figure:
-    """
-    Vẽ đường CV MSE theo λ và đánh dấu best λ.
-
-    Returns plt.Figure
-    """
+    """Vẽ đường CV MSE theo λ (log scale) và đánh dấu best λ."""
     fig, ax = plt.subplots(figsize=(8, 4))
     ax.semilogx(cv_results['lambdas'], cv_results['cv_scores'],
                 color='#4477AA', linewidth=2)
@@ -428,7 +325,7 @@ def plot_cv_lambda(cv_results: dict, best_lambda: float) -> plt.Figure:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# MAIN — Minh họa luồng DataPipeline (C) → ModelComparison (D)
+# MAIN — Minh họa luồng DataPipeline → ModelComparison
 # ─────────────────────────────────────────────────────────────────────────────
 
 if __name__ == '__main__':
@@ -436,13 +333,12 @@ if __name__ == '__main__':
     from data_pipeline import DataPipeline
 
     CSV = os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                       'data', 'nhanes_pre_pipeline.csv')
+                       'data', 'processed', 'nhanes_pre_pipeline.csv')
 
     CONTINUOUS  = ['RIDAGEYR', 'BMXBMI', 'BPXOPLS', 'LBXTC', 'LBXSCR']
     CATEGORICAL = ['RIAGENDR', 'SMQ020', 'DIQ010']
     INVALID     = {'SMQ020': [7.0, 9.0]}
 
-    # ── 1. Pipeline ───────────────────────────────────────────────────────────
     pipe = DataPipeline(CONTINUOUS, CATEGORICAL,
                         target_col='SYSTOLIC_TARGET',
                         invalid_cat_values=INVALID)
@@ -454,10 +350,8 @@ if __name__ == '__main__':
     print(f"X_train: {X_train.shape} | X_test: {X_test.shape}")
     print(f"Features: {feat_names}\n")
 
-    # ── 2. Huấn luyện ────────────────────────────────────────────────────────
     models = train_multiple_models(X_train, y_train, feat_names, seed=42)
 
-    # ── 3. Đánh giá ──────────────────────────────────────────────────────────
     print("\n─── KẾT QUẢ TRÊN TEST SET ───")
     results = evaluate_on_test_set(models, X_test, y_test)
     print(results.to_string(index=False))
@@ -465,7 +359,6 @@ if __name__ == '__main__':
     best_key = results.loc[results['R2'].idxmax(), 'Model']
     print(f"\nMô hình tốt nhất: {best_key}")
 
-    # ── 4. Biểu đồ ───────────────────────────────────────────────────────────
     fig1 = plot_feature_importance(models)
     fig2 = plot_model_comparison(results)
     fig3 = run_residual_analysis(best_key, models, X_test, y_test)
