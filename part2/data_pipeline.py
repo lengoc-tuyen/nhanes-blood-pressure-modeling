@@ -213,19 +213,27 @@ class EDA:
 
 class DataPipeline:
     """
-    Transformer fit/transform để ngăn data leakage.
-    Thứ tự: remap invalid → impute median/mode → one-hot → z-score → prepend bias.
+    Transformer fit/transform ngăn data leakage dùng KNN Imputer nâng cao (from scratch).
+    Quy trình: 
+      1. Học scaler (mean/std) và category maps trên Train.
+      2. Xây dựng Donor Pool từ các bản ghi đầy đủ của Train.
+      3. Lọc Outlier trên Donor Pool bằng IQR * 2.5 (from scratch).
+      4. Chuẩn hóa Z-score tĩnh cho cả Train và Test trước khi đo khoảng cách.
+      5. KNN điền khuyết dùng khoảng cách Euclid chuẩn hóa và trọng số nghịch đảo khoảng cách.
+      6. One-hot encoding & Thêm Intercept.
     """
 
     def __init__(self,
                  continuous_cols: list[str],
                  categorical_cols: list[str],
                  target_col: str = 'SYSTOLIC_TARGET',
-                 invalid_cat_values: dict | None = None):
+                 invalid_cat_values: dict | None = None,
+                 k: int = 5):
         self.continuous_cols    = list(continuous_cols)
         self.categorical_cols   = list(categorical_cols)
         self.target_col         = target_col
         self.invalid_cat_values = invalid_cat_values or {}
+        self.k                  = k
 
         self.impute_median_: dict[str, float] = {}
         self.impute_mode_: dict[str, float]   = {}
@@ -233,8 +241,8 @@ class DataPipeline:
         self.scaler_std_: dict[str, float]    = {}
         self.category_maps_: dict[str, list]  = {}
         self.feature_names_: list[str]        = []
+        self.cleaned_donor_pool_: pd.DataFrame = pd.DataFrame()
         self.is_fitted_: bool                 = False
-
 
     def _remap_invalid(self, df: pd.DataFrame) -> pd.DataFrame:
         """Thay các giá trị không hợp lệ của categorical cols bằng NaN."""
@@ -268,34 +276,36 @@ class DataPipeline:
         names += list(self.continuous_cols)
         for col in self.categorical_cols:
             cats = self.category_maps_.get(col, [])
-            # drop_first: bỏ category đầu tiên
             for cat in cats[1:]:
                 names.append(f"{col}_{cat}")
         return names
 
     def fit(self, X_train: pd.DataFrame, y_train=None) -> 'DataPipeline':
-        """Học tham số (median, mode, mean, std, category_maps) từ X_train."""
+        """Học các tham số và xây dựng Cleaned Donor Pool từ X_train."""
         df = X_train.copy()
+        
+        # Loại các cột định danh hoặc nhãn nếu có
+        for col in ['SEQN', self.target_col]:
+            if col in df.columns:
+                df.drop(columns=[col], inplace=True)
+                
         df = self._remap_invalid(df)
 
+        # 1. Tính toán giá trị Median/Mode làm fallback phụ
         for col in self.continuous_cols:
             if col in df.columns:
                 self.impute_median_[col] = self._compute_median(df[col])
-
         for col in self.categorical_cols:
             if col in df.columns:
                 self.impute_mode_[col] = self._compute_mode(df[col])
 
-        df_filled = df.copy()
+        # 2. Học Mean và Std cho biến liên tục
         for col in self.continuous_cols:
-            if col in df_filled.columns:
-                df_filled[col] = df_filled[col].fillna(self.impute_median_.get(col, 0))
+            if col in df.columns:
+                self.scaler_mean_[col] = float(df[col].mean())
+                self.scaler_std_[col]  = float(df[col].std(ddof=1)) if df[col].std(ddof=1) > 1e-10 else 1.0
 
-        for col in self.continuous_cols:
-            if col in df_filled.columns:
-                self.scaler_mean_[col] = float(df_filled[col].mean())
-                self.scaler_std_[col]  = float(df_filled[col].std(ddof=1))
-
+        # 3. Học Category Maps cho biến phân loại
         for col in self.categorical_cols:
             if col in df.columns:
                 self.category_maps_[col] = sorted(
@@ -303,49 +313,158 @@ class DataPipeline:
                     if v not in self.invalid_cat_values.get(col, [])
                 )
 
+        # 4. Xây dựng Donor Pool từ các complete cases (bản ghi đầy đủ)
+        all_features = self.continuous_cols + self.categorical_cols
+        donor_pool = df.dropna(subset=all_features).copy()
+        
+        # 5. Lọc Outlier trên Donor Pool bằng IQR * 2.5 (from scratch)
+        if len(donor_pool) > 10:
+            mask = pd.Series(True, index=donor_pool.index)
+            for col in self.continuous_cols:
+                vals = sorted(donor_pool[col].tolist())
+                n = len(vals)
+                q1 = vals[n // 4]
+                q3 = vals[(3 * n) // 4]
+                iqr = q3 - q1
+                median_val = vals[n // 2]
+                mask &= donor_pool[col].between(median_val - 2.5 * iqr, median_val + 2.5 * iqr)
+            
+            cleaned_donors = donor_pool[mask].copy()
+            if len(cleaned_donors) > self.k:
+                donor_pool = cleaned_donors
+                
+        self.cleaned_donor_pool_ = donor_pool.reset_index(drop=True)
+        print(f"Donor pool sau lọc outlier sinh học/IQR: còn {len(self.cleaned_donor_pool_)} bản ghi sạch.")
+
         self.feature_names_ = self._build_feature_names()
         self.is_fitted_ = True
         return self
 
+    def _impute_knn(self, df: pd.DataFrame) -> pd.DataFrame:
+        """Điền khuyết bằng KNN nâng cao với trọng số khoảng cách (from scratch)."""
+        df_imputed = df.copy()
+        all_features = self.continuous_cols + self.categorical_cols
+        
+        # Chuyển đổi donor pool sang dạng ma trận chuẩn hóa phục vụ đo khoảng cách
+        donors = self.cleaned_donor_pool_.copy()
+        donors_norm = donors.copy()
+        for col in self.continuous_cols:
+            mean = self.scaler_mean_[col]
+            std = self.scaler_std_[col]
+            donors_norm[col] = (donors[col] - mean) / std
+
+        # Impute từng dòng có chứa NaN
+        records = df_imputed.to_dict('records')
+        donor_records = donors.to_dict('records')
+        donor_norm_records = donors_norm.to_dict('records')
+
+        for idx, row in enumerate(records):
+            missing_cols = [c for c in all_features if pd.isna(row.get(c))]
+            if not missing_cols:
+                continue
+
+            known_cols = [c for c in all_features if not pd.isna(row.get(c))]
+            if not known_cols:
+                # Fallback nếu dòng khuyết toàn bộ đặc trưng
+                for c in missing_cols:
+                    if c in self.continuous_cols:
+                        records[idx][c] = self.impute_median_.get(c, 0.0)
+                    else:
+                        records[idx][c] = self.impute_mode_.get(c)
+                continue
+
+            # Tách các đặc trưng liên tục/phân loại đã biết
+            known_cont = [c for c in known_cols if c in self.continuous_cols]
+            known_cat  = [c for c in known_cols if c in self.categorical_cols]
+
+            # Chuẩn hóa giá trị đã biết của dòng cần điền khuyết
+            row_norm = {}
+            for c in known_cont:
+                mean = self.scaler_mean_[c]
+                std = self.scaler_std_[c]
+                row_norm[c] = (row[c] - mean) / std
+            for c in known_cat:
+                row_norm[c] = row[c]
+
+            # Tính khoảng cách đến tất cả các nhà tài trợ (NaN-Euclidean Distance)
+            p_total = len(all_features)
+            p_known = len(known_cols)
+            scale_factor = p_total / p_known
+
+            dists = []
+            for d_idx, d_row in enumerate(donor_norm_records):
+                # Khoảng cách của biến liên tục chuẩn hóa
+                dist_sq = sum((row_norm[c] - d_row[c]) ** 2 for c in known_cont)
+                # Khoảng cách của biến phân loại (1 nếu khác nhau, 0 nếu giống nhau)
+                dist_sq += sum(0.0 if row_norm[c] == d_row[c] else 1.0 for c in known_cat)
+                
+                # Áp dụng Nan-Euclidean scaling factor
+                d = np.sqrt(dist_sq * scale_factor)
+                dists.append((d, donor_records[d_idx]))
+
+            # Chọn k láng giềng gần nhất
+            dists.sort(key=lambda x: x[0])
+            neighbors = dists[:self.k]
+
+            # Tính trọng số nghịch đảo khoảng cách
+            eps = 1e-8
+            weights = [1.0 / (d + eps) for d, _ in neighbors]
+            sum_weights = sum(weights)
+
+            # Điền khuyết các đặc trưng bị khuyết
+            for c in missing_cols:
+                if c in self.continuous_cols:
+                    # Điền bằng trung bình có trọng số khoảng cách
+                    weighted_sum = sum(w * n[c] for w, (_, n) in zip(weights, neighbors))
+                    records[idx][c] = weighted_sum / sum_weights
+                else:
+                    # Điền bằng bầu chọn có trọng số (weighted voting) cho biến phân loại
+                    votes = {}
+                    for w, (_, n) in zip(weights, neighbors):
+                        cat_val = n[c]
+                        votes[cat_val] = votes.get(cat_val, 0.0) + w
+                    records[idx][c] = max(votes, key=votes.get)
+
+        return pd.DataFrame(records)
+
     def transform(self, X: pd.DataFrame) -> tuple[np.ndarray, list[str]]:
-        """Áp dụng tham số từ fit() lên X. Trả về (X_array, feature_names)."""
+        """Áp dụng tham số và KNN Imputation từ fit() lên X. Trả về (X_array, feature_names)."""
         if not self.is_fitted_:
             raise RuntimeError("Gọi fit() trước khi transform().")
 
         df = X.copy()
 
+        # Loại các cột định danh
         for col in ['SEQN', self.target_col]:
             if col in df.columns:
                 df.drop(columns=[col], inplace=True)
 
         df = self._remap_invalid(df)
 
-        for col in self.continuous_cols:
-            if col in df.columns:
-                df[col] = df[col].fillna(self.impute_median_.get(col, 0))
+        # 1. KNN Imputation (from scratch) sạch sẽ không rò rỉ dữ liệu
+        df = self._impute_knn(df)
 
-        for col in self.categorical_cols:
-            if col in df.columns:
-                df[col] = df[col].fillna(self.impute_mode_.get(col))
-
+        # 2. One-hot encoding với drop_first=True
         for col in self.categorical_cols:
             if col not in df.columns:
                 continue
             cats = self.category_maps_.get(col, [])
-            for cat in cats[1:]:   # drop_first
+            for cat in cats[1:]:
                 df[f"{col}_{cat}"] = (df[col] == cat).astype(float)
             df.drop(columns=[col], inplace=True)
 
+        # 3. Chuẩn hóa Z-score biến liên tục sau điền khuyết
         for col in self.continuous_cols:
             if col not in df.columns:
                 continue
             mean = self.scaler_mean_.get(col, 0.0)
             std  = self.scaler_std_.get(col, 1.0)
-            if std > 1e-10:
-                df[col] = (df[col] - mean) / std
+            df[col] = (df[col] - mean) / std
 
+        # 4. Thêm cột Intercept (bias) ở vị trí đầu tiên
         df.insert(0, 'bias', 1.0)
 
+        # Đảm bảo thứ tự cột chính xác như đã định nghĩa
         for col in self.feature_names_:
             if col not in df.columns:
                 df[col] = 0.0
@@ -378,18 +497,14 @@ class DataPipeline:
 
     def summary(self) -> None:
         """In tóm tắt trạng thái của pipeline."""
-        print("=== DataPipeline Summary ===")
+        print("=== DataPipeline Summary (KNN Imputer Nâng Cao) ===")
         print(f"  Fitted: {self.is_fitted_}")
         if not self.is_fitted_:
             return
+        print(f"  k-Neighbors: {self.k}")
+        print(f"  Donor Pool Size: {len(self.cleaned_donor_pool_)} bản ghi sạch.")
         print(f"  Continuous ({len(self.continuous_cols)}): {self.continuous_cols}")
         print(f"  Categorical ({len(self.categorical_cols)}): {self.categorical_cols}")
-        print("  Impute medians (continuous):")
-        for k, v in self.impute_median_.items():
-            print(f"    {k}: {v:.4f}")
-        print("  Impute modes (categorical):")
-        for k, v in self.impute_mode_.items():
-            print(f"    {k}: {v}")
         print("  Scaler (mean / std):")
         for k in self.continuous_cols:
             print(f"    {k}: mean={self.scaler_mean_.get(k,0):.4f}, std={self.scaler_std_.get(k,0):.4f}")
@@ -400,7 +515,7 @@ class DataPipeline:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# DEMO
+# DEMO TEST PIPELINE
 # ─────────────────────────────────────────────────────────────────────────────
 
 if __name__ == '__main__':
@@ -415,7 +530,8 @@ if __name__ == '__main__':
 
     pipe = DataPipeline(CONTINUOUS, CATEGORICAL,
                         target_col='SYSTOLIC_TARGET',
-                        invalid_cat_values=INVALID)
+                        invalid_cat_values=INVALID,
+                        k=5)
 
     X_tr_df, X_te_df, y_train, y_test = pipe.load_and_split(CSV, seed=42)
     print(f"Train: {len(X_tr_df)} rows | Test: {len(X_te_df)} rows")
@@ -423,7 +539,7 @@ if __name__ == '__main__':
     X_train, feat_names = pipe.fit_transform(X_tr_df)
     X_test,  _          = pipe.transform(X_te_df)
 
-    print(f"X_train shape: {X_train.shape}")
+    print(f"\nX_train shape: {X_train.shape}")
     print(f"X_test  shape: {X_test.shape}")
     print(f"y_train shape: {y_train.shape}")
     pipe.summary()
