@@ -14,7 +14,9 @@ import matplotlib.gridspec as gridspec
 import seaborn as sns
 
 _PART1 = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'part1')
+_PART2 = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _PART1)
+sys.path.insert(0, _PART2)  # part2/residual_analysis.py (Cook's Distance) takes precedence over part1
 
 # pyrefly: ignore [missing-import]
 from ols_implementation import ols_fit
@@ -300,6 +302,7 @@ def run_residual_analysis(
     residuals = y_test - y_hat
 
     return residual_plots(y_test, y_hat, residuals,
+                          X=X_test[:, kept_idx],
                           title_prefix=f"Model: {best_model_key}")
 
 
