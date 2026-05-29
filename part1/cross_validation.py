@@ -6,11 +6,6 @@ def kfold_cv(X: np.ndarray, y: np.ndarray, k: int = 5,
              fit_func=None, fit_kwargs: dict = None) -> dict:
     """
     k-Fold Cross-Validation. Trả về CV MSE trung bình trên k folds.
-
-    Parameters
-    ----------
-    fit_func   : hàm fit, mặc định ols_fit. Phải trả về dict có 'beta_hat'.
-    fit_kwargs : tham số bổ sung cho fit_func (ví dụ: lam=0.1 cho ridge).
     """
     if fit_func is None:
         fit_func = ols_fit

@@ -1,5 +1,5 @@
 """
-Pipeline đầy đủ: từ nhanes_raw.csv (output của merge_nhanes.py, ~12k dòng)
+Quy trình làm sạch dữ liệu đầy đủ: từ nhanes_raw.csv (output của merge_nhanes.py, ~12k dòng)
 đến nhanes_pre_pipeline.csv (dữ liệu sạch, ~7500 dòng, 10 features).
 
 Quy trình:

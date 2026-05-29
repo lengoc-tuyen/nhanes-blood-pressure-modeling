@@ -12,14 +12,10 @@ import seaborn as sns
 from collections import Counter
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# EDA CLASS  (dùng trong notebook)
-# ─────────────────────────────────────────────────────────────────────────────
-
 def load_data(path: str = 'data/processed/nhanes_pre_pipeline.csv') -> pd.DataFrame:
     return pd.read_csv(path)
 
-
+# EDA CLASS  (dùng trong notebook)
 class EDA:
     def __init__(self, df: pd.DataFrame):
         self.df = df
@@ -207,17 +203,14 @@ class EDA:
         print("k-NN imputation hoàn thành.")
 
 
-# ─────────────────────────────────────────────────────────────────────────────
 # DATA PIPELINE CLASS  (fit/transform, không data leakage)
-# ─────────────────────────────────────────────────────────────────────────────
-
 class DataPipeline:
     """
-    Transformer fit/transform ngăn data leakage dùng KNN Imputer nâng cao (from scratch).
+    Transformer fit/transform ngăn data leakage dùng KNN Imputer nâng cao.
     Quy trình: 
       1. Học scaler (mean/std) và category maps trên Train.
       2. Xây dựng Donor Pool từ các bản ghi đầy đủ của Train.
-      3. Lọc Outlier trên Donor Pool bằng IQR * 2.5 (from scratch).
+      3. Lọc Outlier trên Donor Pool bằng IQR * 2.5.
       4. Chuẩn hóa Z-score tĩnh cho cả Train và Test trước khi đo khoảng cách.
       5. KNN điền khuyết dùng khoảng cách Euclid chuẩn hóa và trọng số nghịch đảo khoảng cách.
       6. One-hot encoding & Thêm Intercept.
@@ -317,7 +310,7 @@ class DataPipeline:
         all_features = self.continuous_cols + self.categorical_cols
         donor_pool = df.dropna(subset=all_features).copy()
         
-        # 5. Lọc Outlier trên Donor Pool bằng IQR * 2.5 (from scratch)
+        # 5. Lọc Outlier trên Donor Pool bằng IQR * 2.5
         if len(donor_pool) > 10:
             mask = pd.Series(True, index=donor_pool.index)
             for col in self.continuous_cols:
@@ -341,7 +334,7 @@ class DataPipeline:
         return self
 
     def _impute_knn(self, df: pd.DataFrame) -> pd.DataFrame:
-        """Điền khuyết bằng KNN nâng cao với trọng số khoảng cách (from scratch)."""
+        """Điền khuyết bằng KNN nâng cao với trọng số khoảng cách."""
         df_imputed = df.copy()
         all_features = self.continuous_cols + self.categorical_cols
         
@@ -441,7 +434,7 @@ class DataPipeline:
 
         df = self._remap_invalid(df)
 
-        # 1. KNN Imputation (from scratch) sạch sẽ không rò rỉ dữ liệu
+        # 1. KNN Imputation sạch sẽ không rò rỉ dữ liệu
         df = self._impute_knn(df)
 
         # 2. One-hot encoding với drop_first=True
@@ -514,10 +507,7 @@ class DataPipeline:
         print(f"  Output features ({len(self.feature_names_)}): {self.feature_names_}")
 
 
-# ─────────────────────────────────────────────────────────────────────────────
 # DEMO TEST PIPELINE
-# ─────────────────────────────────────────────────────────────────────────────
-
 if __name__ == '__main__':
     import os
 
