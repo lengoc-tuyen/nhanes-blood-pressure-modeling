@@ -1,16 +1,28 @@
 # Python
 __pycache__/
-*.py[cod]
+*.pyc
 *.pyo
-.venv/
+*.pyd
 *.egg-info/
+*.egg
+.eggs/
+dist/
+build/
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Data files (large raw NHANES files)
+part2/data/dataset/
+
+# Claude Code config
+.claude/
+
+# Submission artifacts
+*.zip
 
 # OS
 .DS_Store
 Thumbs.db
-
-# Large raw data files (download separately — see README)
-part2/data/dataset/*.xpt
-
-# Jupyter checkpoints
-.ipynb_checkpoints/
